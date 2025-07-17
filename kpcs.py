@@ -309,7 +309,7 @@ def create_top_n_table(dataframe, n, group_by_col, dates):
     total_row['Tỷ lệ chưa KP đến cuối Quý'] = (total_row.at['TỔNG CỘNG CỦA NHÓM', 'Tồn cuối quý'] / total_denom) if total_denom != 0 else 0
     return pd.concat([top_n, total_row])
 
-# ✨ HÀM ĐÃ ĐƯỢC CẬP NHẬT ĐỂ SỬA LỖI SẮP XẾP DÒNG TỔNG CỘNG ✨
+# ✨ HÀM PHÂN CẤP CHÍNH (Báo cáo 4 & 7) - Đã sửa lỗi sắp xếp
 def create_hierarchical_table(dataframe, parent_col, child_col, dates):
     cols_order = ['Tên Đơn vị', 'Tồn đầu năm', 'Phát sinh năm', 'Khắc phục năm', 'Tồn đầu quý', 'Phát sinh quý', 'Khắc phục quý', 'Tồn cuối quý', 'Quá hạn khắc phục', 'Trong đó quá hạn trên 1 năm', 'Tỷ lệ chưa KP đến cuối Quý']
     if dataframe.empty or parent_col not in dataframe.columns or child_col not in dataframe.columns:
@@ -320,95 +320,89 @@ def create_hierarchical_table(dataframe, parent_col, child_col, dates):
     summary_with_parent = pd.merge(summary_child.reset_index().rename(columns={'index': child_col}), parent_mapping, on=child_col, how='left')
     
     final_report_rows = []
-    unique_parents = sorted(dataframe[parent_col].dropna().unique()) # Sắp xếp tên đơn vị cha
+    unique_parents = sorted(dataframe[parent_col].dropna().unique())
     
     for parent_name in unique_parents:
         children_df = summary_with_parent[summary_with_parent[parent_col] == parent_name]
         if children_df.empty: continue
-        
         numeric_cols = children_df.select_dtypes(include=np.number).columns
         parent_row_sum = children_df[numeric_cols].sum().to_frame().T
         parent_row_sum['Tên Đơn vị'] = f"**Cộng {parent_name}**"
         final_report_rows.append(parent_row_sum)
-        
         children_to_append = children_df.rename(columns={child_col: 'Tên Đơn vị'})
         children_to_append['Tên Đơn vị'] = "  •  " + children_to_append['Tên Đơn vị'].astype(str)
         final_report_rows.append(children_to_append)
 
     if not final_report_rows: return pd.DataFrame(columns=cols_order)
     
-    # Sắp xếp lại toàn bộ bảng dựa trên tên đã định dạng
     full_report_df = pd.concat(final_report_rows, ignore_index=True)
     
-    # Thêm dòng tổng cộng vào cuối cùng sau khi đã sắp xếp
     grand_total_row = calculate_summary_metrics(dataframe, [], **dates)
     grand_total_row['Tên Đơn vị'] = '**TỔNG CỘNG TOÀN BỘ**'
     full_report_df = pd.concat([full_report_df, grand_total_row], ignore_index=True)
     
     return full_report_df.reindex(columns=cols_order).fillna(0)
 
-def create_report_8_flat_overdue(dataframe, parent_col, dates):
+# ✨ HÀM PHÂN CẤP QUÁ HẠN (Dùng chung cho Báo cáo 8 & 9) ✨
+def create_overdue_hierarchical_report(dataframe, parent_col, child_col, dates):
     q_end = dates['quarter_end_date']
+    
     df_outstanding = dataframe[(dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] <= q_end) & ((dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'].isnull()) | (dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] > q_end))].copy()
     if df_outstanding.empty:
-        st.warning("Hội sở: Không có kiến nghị tồn đọng trong kỳ.")
+        st.warning(f"Không có kiến nghị tồn đọng cho nhóm báo cáo này.")
         return pd.DataFrame()
+        
     df_overdue = df_outstanding[df_outstanding['Thời hạn hoàn thành (mm/dd/yyyy)'] < q_end].copy()
-    if df_overdue.empty:
-        st.warning("Hội sở: Không có kiến nghị quá hạn trong kỳ.")
-        return pd.DataFrame()
-    df_overdue['Số ngày quá hạn'] = (q_end - df_overdue['Thời hạn hoàn thành (mm/dd/yyyy)']).dt.days
-    bins = [-np.inf, 90, 180, 270, 365, np.inf]; labels = ['Dưới 3 tháng', 'Từ 3-6 tháng', 'Từ 6-9 tháng', 'Từ 9-12 tháng', 'Trên 1 năm']
-    df_overdue['Nhóm quá hạn'] = pd.cut(df_overdue['Số ngày quá hạn'], bins=bins, labels=labels, right=False)
-    overdue_breakdown = pd.crosstab(df_overdue[parent_col], df_overdue['Nhóm quá hạn']).reset_index()
-    ton_cuoi_quy = calculate_summary_metrics(dataframe, [parent_col], **dates)[['Tồn cuối quý']].reset_index().rename(columns={'index': parent_col})
-    final_df = pd.merge(ton_cuoi_quy, overdue_breakdown, on=parent_col, how='left').fillna(0)
-    final_df['Quá hạn khắc phục'] = final_df[labels].sum(axis=1)
-    final_cols_order = [parent_col, 'Tồn cuối quý', 'Quá hạn khắc phục'] + labels
-    final_df = final_df.reindex(columns=final_cols_order, fill_value=0)
-    numeric_cols = final_df.columns.drop(parent_col)
-    final_df[numeric_cols] = final_df[numeric_cols].astype(int)
-    total_row = pd.DataFrame(final_df[numeric_cols].sum()).T; total_row[parent_col] = 'TỔNG CỘNG'
-    final_df = pd.concat([final_df, total_row])
-    return final_df.rename(columns={parent_col: 'Tên Đơn vị'})
-
-def create_report_9_hierarchical_overdue(dataframe, parent_col, child_col, dates):
-    q_end = dates['quarter_end_date']
-    df_outstanding = dataframe[(dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] <= q_end) & ((dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'].isnull()) | (dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] > q_end))].copy()
-    if df_outstanding.empty:
-        st.warning("ĐVKD & AMC: Không có kiến nghị tồn đọng trong kỳ.")
-        return pd.DataFrame()
-    df_overdue = df_outstanding[df_outstanding['Thời hạn hoàn thành (mm/dd/yyyy)'] < q_end].copy()
+    
+    # Tính toán các chỉ số cần thiết cho cấp CON
     ton_cuoi_quy_child = calculate_summary_metrics(dataframe, [child_col], **dates)[['Tồn cuối quý']].reset_index().rename(columns={'index': child_col})
-    overdue_breakdown_child = pd.DataFrame(columns=[child_col])
+    
+    overdue_breakdown_child = pd.DataFrame()
     labels = ['Dưới 3 tháng', 'Từ 3-6 tháng', 'Từ 6-9 tháng', 'Từ 9-12 tháng', 'Trên 1 năm']
     if not df_overdue.empty:
         df_overdue['Số ngày quá hạn'] = (q_end - df_overdue['Thời hạn hoàn thành (mm/dd/yyyy)']).dt.days
         bins = [-np.inf, 90, 180, 270, 365, np.inf]
         df_overdue['Nhóm quá hạn'] = pd.cut(df_overdue['Số ngày quá hạn'], bins=bins, labels=labels, right=False)
         overdue_breakdown_child = pd.crosstab(df_overdue[child_col], df_overdue['Nhóm quá hạn']).reset_index()
+
+    # Kết hợp dữ liệu cấp CON một cách an toàn
     summary_child = pd.merge(ton_cuoi_quy_child, overdue_breakdown_child, on=child_col, how='left')
     parent_mapping = dataframe[[child_col, parent_col]].drop_duplicates()
     summary_child_with_parent = pd.merge(summary_child, parent_mapping, on=child_col, how='left')
+    
+    # Xây dựng báo cáo phân cấp
     final_report_rows = []
-    unique_parents = sorted(dataframe[parent_col].dropna().unique()) # Sắp xếp tên đơn vị cha
+    unique_parents = sorted(dataframe[parent_col].dropna().unique())
     for parent_name in unique_parents:
         children_df = summary_child_with_parent[summary_child_with_parent[parent_col] == parent_name]
         if children_df.empty: continue
+        
         numeric_cols = children_df.select_dtypes(include=np.number).columns
-        parent_row_sum = children_df[numeric_cols].sum().to_frame().T; parent_row_sum['Tên Đơn vị'] = f"**Cộng {parent_name}**"
+        parent_row_sum = children_df[numeric_cols].sum().to_frame().T
+        parent_row_sum['Tên Đơn vị'] = f"**{parent_name}**" # Định dạng tên cha (in đậm)
         final_report_rows.append(parent_row_sum)
-        children_to_append = children_df.rename(columns={child_col: 'Tên Đơn vị'}); children_to_append['Tên Đơn vị'] = "  • " + children_to_append['Tên Đơn vị'];
+        
+        children_to_append = children_df.rename(columns={child_col: 'Tên Đơn vị'})
+        children_to_append['Tên Đơn vị'] = "  • " + children_to_append['Tên Đơn vị'] # Định dạng tên con (thụt lề)
         final_report_rows.append(children_to_append)
+        
     if not final_report_rows: return pd.DataFrame()
+
     final_df = pd.concat(final_report_rows, ignore_index=True).fillna(0)
-    grand_total_row = pd.DataFrame(final_df.select_dtypes(include=np.number).sum()).T; grand_total_row['Tên Đơn vị'] = '**TỔNG CỘNG TOÀN BỘ**'
+    
+    # Thêm dòng tổng cộng
+    grand_total_row = pd.DataFrame(final_df.select_dtypes(include=np.number).sum()).T
+    grand_total_row['Tên Đơn vị'] = '**TỔNG CỘNG TOÀN BỘ**'
     final_df = pd.concat([final_df, grand_total_row])
+    
+    # Hoàn thiện các cột cuối cùng
     final_df['Quá hạn khắc phục'] = final_df[[col for col in labels if col in final_df.columns]].sum(axis=1)
     final_cols_order = ['Tên Đơn vị', 'Tồn cuối quý', 'Quá hạn khắc phục'] + labels
     final_df = final_df.reindex(columns=final_cols_order, fill_value=0)
+    
     numeric_cols = final_df.columns.drop('Tên Đơn vị')
     final_df[numeric_cols] = final_df[numeric_cols].astype(int)
+    
     return final_df
 
 def format_excel_sheet(writer, df_to_write, sheet_name, index=True):
@@ -465,10 +459,10 @@ if uploaded_file is not None:
     CHILD_COL = 'Đơn vị thực hiện KPCS trong quý'
 
     st.markdown("---"); st.header("Chọn Loại Báo Cáo Để Tạo")
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
 
     with col1:
-        if st.button("🚀 Tạo 7 Báo cáo (Tổng hợp)"):
+        if st.button("🚀 Tạo Báo cáo Tổng hợp (1-7)"):
             with st.spinner("⏳ Đang xử lý và tạo 7 báo cáo..."):
                 output_stream = BytesIO()
                 with pd.ExcelWriter(output_stream, engine='xlsxwriter') as writer:
@@ -484,28 +478,22 @@ if uploaded_file is not None:
             st.download_button(label="📥 Tải xuống File Tổng hợp", data=excel_data, file_name=f"Tong_hop_Bao_cao_KPCS_Q{input_quarter}_{input_year}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             
     with col2:
-        if st.button("📊 Tạo BC Quá hạn Hội sở (Bảng 8)"):
-            with st.spinner("⏳ Đang xử lý và tạo Báo cáo 8..."):
-                df8 = create_report_8_flat_overdue(df_hoiso, PARENT_COL, dates)
-                if not df8.empty:
-                    output_stream_8 = BytesIO()
-                    with pd.ExcelWriter(output_stream_8, engine='xlsxwriter') as writer:
-                         format_excel_sheet(writer, df8, "BC_QuaHan_TH_HoiSo", index=False)
-                    excel_data_8 = output_stream_8.getvalue()
-                    st.success("🎉 Đã tạo xong file Excel Báo cáo 8!")
-                    st.download_button(label="📥 Tải xuống File Báo cáo 8", data=excel_data_8, file_name=f"BC_QuaHan_TH_HoiSo_Q{input_quarter}_{input_year}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-    with col3:
-        if st.button("📈 Tạo BC Quá hạn ĐVKD (Bảng 9)"):
-            with st.spinner("⏳ Đang xử lý và tạo Báo cáo 9..."):
-                df9 = create_report_9_hierarchical_overdue(df_dvdk_amc, PARENT_COL, CHILD_COL, dates)
-                if not df9.empty:
-                    output_stream_9 = BytesIO()
-                    with pd.ExcelWriter(output_stream_9, engine='xlsxwriter') as writer:
-                         format_excel_sheet(writer, df9, "BC_QuaHan_Pcap_DVDK", index=False)
-                    excel_data_9 = output_stream_9.getvalue()
-                    st.success("🎉 Đã tạo xong file Excel Báo cáo 9!")
-                    st.download_button(label="📥 Tải xuống File Báo cáo 9", data=excel_data_9, file_name=f"BC_QuaHan_Pcap_DVDK_Q{input_quarter}_{input_year}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        if st.button("📊 Tạo BC Quá hạn Chi tiết"):
+            with st.spinner("⏳ Đang xử lý và tạo Báo cáo quá hạn chi tiết..."):
+                # Gọi hàm dùng chung cho cả hai nhóm
+                df8 = create_overdue_hierarchical_report(df_hoiso, PARENT_COL, CHILD_COL, dates)
+                df9 = create_overdue_hierarchical_report(df_dvdk_amc, PARENT_COL, CHILD_COL, dates)
+                
+                output_stream_overdue = BytesIO()
+                with pd.ExcelWriter(output_stream_overdue, engine='xlsxwriter') as writer:
+                    if not df8.empty:
+                        format_excel_sheet(writer, df8, "BC_QuaHan_Pcap_HoiSo", index=False)
+                    if not df9.empty:
+                        format_excel_sheet(writer, df9, "BC_QuaHan_Pcap_DVDK", index=False)
+                
+                excel_data_overdue = output_stream_overdue.getvalue()
+            st.success("🎉 Đã tạo xong file Excel Quá hạn chi tiết!")
+            st.download_button(label="📥 Tải xuống File Quá hạn Chi tiết", data=excel_data_overdue, file_name=f"BC_QuaHan_ChiTiet_Q{input_quarter}_{input_year}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 else:
     st.info("💡 Vui lòng tải lên file Excel chứa dữ liệu thô để bắt đầu.")
