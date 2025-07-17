@@ -115,31 +115,32 @@ def create_report_8_overdue_breakdown(dataframe, parent_col, dates):
     bins = [-np.inf, 90, 180, 270, 365, np.inf]
     labels = ['Dưới 3 tháng', 'Từ 3-6 tháng', 'Từ 6-9 tháng', 'Từ 9-12 tháng', 'Trên 1 năm']
     df_overdue['Nhóm quá hạn'] = pd.cut(df_overdue['Số ngày quá hạn'], bins=bins, labels=labels, right=False)
+    
     overdue_breakdown = pd.crosstab(df_overdue[parent_col], df_overdue['Nhóm quá hạn'])
     ton_cuoi_quy = calculate_summary_metrics(dataframe, [parent_col], **dates)[['Tồn cuối quý']]
+
+    # ✨ SỬA LỖI InvalidIndexError: Đảm bảo hai index cùng kiểu dữ liệu string ✨
+    ton_cuoi_quy.index = ton_cuoi_quy.index.astype(str)
+    overdue_breakdown.index = overdue_breakdown.index.astype(str)
+
     final_df = ton_cuoi_quy.join(overdue_breakdown, how='left').fillna(0)
+    
     final_df['Quá hạn khắc phục'] = final_df[labels].sum(axis=1)
     final_cols_order = ['Tồn cuối quý', 'Quá hạn khắc phục'] + labels
     final_df = final_df.reindex(columns=final_cols_order, fill_value=0).astype(int)
     total_row = pd.DataFrame(final_df.sum()).T
     total_row.index = ['TỔNG CỘNG']
     final_df = pd.concat([final_df, total_row])
+    
     return final_df.reset_index().rename(columns={'index': 'Tên Đơn vị'})
 
 def format_excel_sheet(writer, df_to_write, sheet_name, index=True):
-    """Hàm định dạng cho một sheet trong file Excel."""
     df_to_write.to_excel(writer, sheet_name=sheet_name, index=index)
     workbook = writer.book
     worksheet = writer.sheets[sheet_name]
-    
-    # Định dạng chung
     border_format = workbook.add_format({'border': 1, 'valign': 'vcenter', 'align': 'left'})
-    
-    # Áp dụng định dạng cho toàn bộ dữ liệu
     worksheet.conditional_format(0, 0, len(df_to_write), len(df_to_write.columns) + (1 if index else 0) -1, 
                                  {'type': 'no_blanks', 'format': border_format})
-
-    # Tự động điều chỉnh độ rộng cột
     for idx, col in enumerate(df_to_write.columns):
         series = df_to_write[col]
         max_len = max((series.astype(str).map(len).max(), len(str(series.name)))) + 3
@@ -164,7 +165,6 @@ if uploaded_file is not None:
     @st.cache_data
     def load_data(file):
         df = pd.read_excel(file)
-        # Chuyển đổi các cột ngày tháng ngay khi tải dữ liệu
         date_cols = ['Ngày, tháng, năm ban hành (mm/dd/yyyy)', 'NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)', 'Thời hạn hoàn thành (mm/dd/yyyy)']
         for col in date_cols:
             if col in df.columns: df[col] = pd.to_datetime(df[col], errors='coerce')
@@ -174,21 +174,16 @@ if uploaded_file is not None:
     st.write("Xem trước 5 dòng dữ liệu đầu tiên:")
     st.dataframe(df_raw.head())
 
-    # --- Chuẩn bị dữ liệu chung sau khi tải lên ---
     df = df_raw.copy()
     dates = {'year_start_date': pd.to_datetime(f'{input_year}-01-01'), 'quarter_start_date': pd.to_datetime(f'{input_year}-{(input_quarter-1)*3 + 1}-01'), 'quarter_end_date': pd.to_datetime(f'{input_year}-{(input_quarter-1)*3 + 1}-01') + pd.offsets.QuarterEnd(0)}
     
-    # ✨ SỬA LỖI ATTRIBUTEERROR BẰNG PHƯƠNG THỨC .apply() AN TOÀN HƠN ✨
     def clean_string(x):
-        if isinstance(x, str):
-            return x.strip()
-        # Chuyển các giá trị không phải chuỗi (NaN, số...) thành chuỗi rỗng
+        if isinstance(x, str): return x.strip()
         return '' if pd.isna(x) else str(x)
 
     text_cols = ['Đơn vị thực hiện KPCS trong quý', 'SUM (THEO Khối, KV, ĐVKD, Hội sở, Ban Dự Án QLTS)', 'ĐVKD, AMC, Hội sở (Nhập ĐVKD hoặc Hội sở hoặc AMC)']
     for col in text_cols:
-        if col in df.columns:
-            df[col] = df[col].apply(clean_string)
+        if col in df.columns: df[col] = df[col].apply(clean_string)
             
     df['Nhom_Don_Vi'] = np.where(df['ĐVKD, AMC, Hội sở (Nhập ĐVKD hoặc Hội sở hoặc AMC)'] == 'Hội sở', 'Hội sở', 'ĐVKD, AMC')
     df_hoiso = df[df['Nhom_Don_Vi'] == 'Hội sở'].copy()
@@ -196,7 +191,6 @@ if uploaded_file is not None:
     PARENT_COL = 'SUM (THEO Khối, KV, ĐVKD, Hội sở, Ban Dự Án QLTS)'
     CHILD_COL = 'Đơn vị thực hiện KPCS trong quý'
 
-    # --- TẠO CÁC CỘT CHO CÁC NÚT BẤM ---
     col1, col2 = st.columns(2)
 
     with col1:
@@ -236,8 +230,6 @@ if uploaded_file is not None:
                     excel_data_8 = output_stream_8.getvalue()
                     st.success("🎉 Đã tạo xong file Excel Báo cáo 8!")
                     st.download_button(label="📥 Tải xuống File Báo cáo 8", data=excel_data_8, file_name=f"BC_QuaHan_ChiTiet_HoiSo_Q{input_quarter}_{input_year}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                # else: # Thông báo đã có trong hàm create_report_8
-                #     st.info("Không có dữ liệu để tạo báo cáo 8.")
 
 else:
     st.info("💡 Vui lòng tải lên file Excel chứa dữ liệu để bắt đầu.")
