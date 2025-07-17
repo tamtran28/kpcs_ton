@@ -102,15 +102,21 @@ def create_hierarchical_table(dataframe, parent_col, child_col, dates):
     return full_report_df.reindex(columns=cols_order)
 
 def create_report_8_overdue_breakdown(dataframe, parent_col, dates):
+    """
+    Tạo báo cáo chi tiết quá hạn. Đã sửa lỗi InvalidIndexError bằng cách dùng pd.merge().
+    """
     q_end = dates['quarter_end_date']
+    
     df_outstanding = dataframe[(dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] <= q_end) & ((dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'].isnull()) | (dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] > q_end))].copy()
     if df_outstanding.empty:
         st.warning("Không có kiến nghị tồn đọng trong kỳ để tạo báo cáo 8.")
         return pd.DataFrame()
+
     df_overdue = df_outstanding[df_outstanding['Thời hạn hoàn thành (mm/dd/yyyy)'] < q_end].copy()
     if df_overdue.empty:
         st.warning("Không có kiến nghị quá hạn trong kỳ để tạo báo cáo 8.")
         return pd.DataFrame()
+        
     df_overdue['Số ngày quá hạn'] = (q_end - df_overdue['Thời hạn hoàn thành (mm/dd/yyyy)']).dt.days
     bins = [-np.inf, 90, 180, 270, 365, np.inf]
     labels = ['Dưới 3 tháng', 'Từ 3-6 tháng', 'Từ 6-9 tháng', 'Từ 9-12 tháng', 'Trên 1 năm']
@@ -119,20 +125,29 @@ def create_report_8_overdue_breakdown(dataframe, parent_col, dates):
     overdue_breakdown = pd.crosstab(df_overdue[parent_col], df_overdue['Nhóm quá hạn'])
     ton_cuoi_quy = calculate_summary_metrics(dataframe, [parent_col], **dates)[['Tồn cuối quý']]
 
-    # ✨ SỬA LỖI InvalidIndexError: Đảm bảo hai index cùng kiểu dữ liệu string ✨
-    ton_cuoi_quy.index = ton_cuoi_quy.index.astype(str)
-    overdue_breakdown.index = overdue_breakdown.index.astype(str)
+    # ✨ SỬA LỖI InvalidIndexError: Dùng pd.merge() thay cho .join() ✨
+    # Chuyển index thành cột để merge
+    ton_cuoi_quy_reset = ton_cuoi_quy.reset_index().rename(columns={'index': parent_col})
+    overdue_breakdown_reset = overdue_breakdown.reset_index()
 
-    final_df = ton_cuoi_quy.join(overdue_breakdown, how='left').fillna(0)
+    # Merge hai bảng dựa trên cột chung (parent_col)
+    final_df = pd.merge(ton_cuoi_quy_reset, overdue_breakdown_reset, on=parent_col, how='left').fillna(0)
     
     final_df['Quá hạn khắc phục'] = final_df[labels].sum(axis=1)
-    final_cols_order = ['Tồn cuối quý', 'Quá hạn khắc phục'] + labels
-    final_df = final_df.reindex(columns=final_cols_order, fill_value=0).astype(int)
-    total_row = pd.DataFrame(final_df.sum()).T
-    total_row.index = ['TỔNG CỘNG']
+    
+    final_cols_order = [parent_col, 'Tồn cuối quý', 'Quá hạn khắc phục'] + labels
+    final_df = final_df.reindex(columns=final_cols_order, fill_value=0)
+    
+    # Chuyển đổi các cột số sang kiểu integer
+    numeric_cols = final_df.columns.drop(parent_col)
+    final_df[numeric_cols] = final_df[numeric_cols].astype(int)
+    
+    total_row = pd.DataFrame(final_df[numeric_cols].sum()).T
+    total_row[parent_col] = 'TỔNG CỘNG'
     final_df = pd.concat([final_df, total_row])
     
-    return final_df.reset_index().rename(columns={'index': 'Tên Đơn vị'})
+    return final_df.rename(columns={parent_col: 'Tên Đơn vị'})
+
 
 def format_excel_sheet(writer, df_to_write, sheet_name, index=True):
     df_to_write.to_excel(writer, sheet_name=sheet_name, index=index)
@@ -232,4 +247,4 @@ if uploaded_file is not None:
                     st.download_button(label="📥 Tải xuống File Báo cáo 8", data=excel_data_8, file_name=f"BC_QuaHan_ChiTiet_HoiSo_Q{input_quarter}_{input_year}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 else:
-    st.info("💡 Vui lòng tải lên file Excel chứa dữ liệu để bắt đầu.")
+    st.info("💡 Vui lòng tải lên file Excel chứa dữ liệu thô để bắt đầu.")
