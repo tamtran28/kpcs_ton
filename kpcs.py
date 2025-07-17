@@ -265,35 +265,28 @@ st.title("📊 Hệ thống Báo cáo Tự động")
 # PHẦN 1: CÁC HÀM LOGIC
 # ==============================================================================
 
-# --- CÁC HÀM TÍNH TOÁN CỐT LÕI ---
 def calculate_summary_metrics(dataframe, groupby_cols, year_start_date, quarter_start_date, quarter_end_date):
-    if not isinstance(groupby_cols, list):
-        raise TypeError("groupby_cols phải là một danh sách (list)")
+    if not isinstance(groupby_cols, list): raise TypeError("groupby_cols phải là một danh sách (list)")
     def agg(data_filtered, cols):
         if data_filtered.empty: return 0 if not cols else pd.Series(dtype=int)
         if not cols: return len(data_filtered)
         return data_filtered.groupby(cols).size()
-
     ton_dau_quy = agg(dataframe[(dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] < quarter_start_date) & ((dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'].isnull()) | (dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] >= quarter_start_date))], groupby_cols)
     phat_sinh_quy = agg(dataframe[(dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] >= quarter_start_date) & (dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] <= quarter_end_date)], groupby_cols)
     khac_phuc_quy = agg(dataframe[(dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] >= quarter_start_date) & (dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] <= quarter_end_date)], groupby_cols)
     phat_sinh_nam = agg(dataframe[(dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] >= year_start_date) & (dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] <= quarter_end_date)], groupby_cols)
     khac_phuc_nam = agg(dataframe[(dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] >= year_start_date) & (dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] <= quarter_end_date)], groupby_cols)
     ton_dau_nam = agg(dataframe[(dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] < year_start_date) & ((dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'].isnull()) | (dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] >= year_start_date))], groupby_cols)
-
     if not groupby_cols:
         summary = pd.DataFrame({'Tồn đầu quý': [ton_dau_quy], 'Phát sinh quý': [phat_sinh_quy], 'Khắc phục quý': [khac_phuc_quy], 'Tồn đầu năm': [ton_dau_nam], 'Phát sinh năm': [phat_sinh_nam], 'Khắc phục năm': [khac_phuc_nam]})
     else:
         summary = pd.DataFrame({'Tồn đầu quý': ton_dau_quy, 'Phát sinh quý': phat_sinh_quy, 'Khắc phục quý': khac_phuc_quy, 'Tồn đầu năm': ton_dau_nam, 'Phát sinh năm': phat_sinh_nam, 'Khắc phục năm': khac_phuc_nam}).fillna(0).astype(int)
-
     summary['Tồn cuối quý'] = summary['Tồn đầu quý'] + summary['Phát sinh quý'] - summary['Khắc phục quý']
     df_actually_outstanding = dataframe[(dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] <= quarter_end_date) & ((dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'].isnull()) | (dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] > quarter_end_date))]
     qua_han_khac_phuc = agg(df_actually_outstanding[df_actually_outstanding['Thời hạn hoàn thành (mm/dd/yyyy)'] < quarter_end_date], groupby_cols)
     qua_han_tren_1_nam = agg(df_actually_outstanding[df_actually_outstanding['Thời hạn hoàn thành (mm/dd/yyyy)'] < (quarter_end_date - pd.DateOffset(years=1))], groupby_cols)
-    summary['Quá hạn khắc phục'] = qua_han_khac_phuc
-    summary['Trong đó quá hạn trên 1 năm'] = qua_han_tren_1_nam
-    summary = summary.fillna(0).astype(int)
-    denominator = summary['Phát sinh năm'] + summary['Tồn đầu năm']
+    summary['Quá hạn khắc phục'] = qua_han_khac_phuc; summary['Trong đó quá hạn trên 1 năm'] = qua_han_tren_1_nam
+    summary = summary.fillna(0).astype(int); denominator = summary['Phát sinh năm'] + summary['Tồn đầu năm']
     summary['Tỷ lệ chưa KP đến cuối Quý'] = (summary['Tồn cuối quý'] / denominator).replace([np.inf, -np.inf], 0).fillna(0)
     final_cols_order = ['Tồn đầu năm', 'Phát sinh năm', 'Khắc phục năm', 'Tồn đầu quý', 'Phát sinh quý', 'Khắc phục quý', 'Tồn cuối quý', 'Quá hạn khắc phục', 'Trong đó quá hạn trên 1 năm', 'Tỷ lệ chưa KP đến cuối Quý']
     return summary.reindex(columns=final_cols_order, fill_value=0)
@@ -336,7 +329,7 @@ def create_hierarchical_table(dataframe, parent_col, child_col, dates):
     full_report_df = pd.concat([full_report_df, grand_total_row], ignore_index=True)
     return full_report_df.reindex(columns=cols_order)
 
-# ✨ HÀM CHO BÁO CÁO 8 (HỘI SỞ - DẠNG PHẲNG) ✨
+# ✨ HÀM CHO BÁO CÁO 8 (HỘI SỞ - DẠNG PHẲNG) - ĐÃ SỬA LỖI ✨
 def create_report_8_flat_overdue(dataframe, parent_col, dates):
     q_end = dates['quarter_end_date']
     df_outstanding = dataframe[(dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] <= q_end) & ((dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'].isnull()) | (dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] > q_end))].copy()
@@ -350,15 +343,23 @@ def create_report_8_flat_overdue(dataframe, parent_col, dates):
     df_overdue['Số ngày quá hạn'] = (q_end - df_overdue['Thời hạn hoàn thành (mm/dd/yyyy)']).dt.days
     bins = [-np.inf, 90, 180, 270, 365, np.inf]; labels = ['Dưới 3 tháng', 'Từ 3-6 tháng', 'Từ 6-9 tháng', 'Từ 9-12 tháng', 'Trên 1 năm']
     df_overdue['Nhóm quá hạn'] = pd.cut(df_overdue['Số ngày quá hạn'], bins=bins, labels=labels, right=False)
-    overdue_breakdown = pd.crosstab(df_overdue[parent_col], df_overdue['Nhóm quá hạn'])
-    ton_cuoi_quy = calculate_summary_metrics(dataframe, [parent_col], **dates)[['Tồn cuối quý']]
-    final_df = ton_cuoi_quy.join(overdue_breakdown, how='left').fillna(0)
+    
+    overdue_breakdown = pd.crosstab(df_overdue[parent_col], df_overdue['Nhóm quá hạn']).reset_index()
+    ton_cuoi_quy = calculate_summary_metrics(dataframe, [parent_col], **dates)[['Tồn cuối quý']].reset_index().rename(columns={'index': parent_col})
+    
+    # Sửa lỗi InvalidIndexError bằng pd.merge()
+    final_df = pd.merge(ton_cuoi_quy, overdue_breakdown, on=parent_col, how='left').fillna(0)
+    
     final_df['Quá hạn khắc phục'] = final_df[labels].sum(axis=1)
-    final_cols_order = ['Tồn cuối quý', 'Quá hạn khắc phục'] + labels
-    final_df = final_df.reindex(columns=final_cols_order, fill_value=0).astype(int)
-    total_row = pd.DataFrame(final_df.sum()).T; total_row.index = ['TỔNG CỘNG']
+    final_cols_order = [parent_col, 'Tồn cuối quý', 'Quá hạn khắc phục'] + labels
+    final_df = final_df.reindex(columns=final_cols_order, fill_value=0)
+    numeric_cols = final_df.columns.drop(parent_col)
+    final_df[numeric_cols] = final_df[numeric_cols].astype(int)
+    
+    total_row = pd.DataFrame(final_df[numeric_cols].sum()).T; total_row[parent_col] = 'TỔNG CỘNG'
     final_df = pd.concat([final_df, total_row])
-    return final_df.reset_index().rename(columns={'index': 'Tên Đơn vị'})
+    
+    return final_df.rename(columns={parent_col: 'Tên Đơn vị'})
 
 # ✨ HÀM MỚI CHO BÁO CÁO 9 (ĐVKD & AMC - DẠNG PHÂN CẤP) ✨
 def create_report_9_hierarchical_overdue(dataframe, parent_col, child_col, dates):
@@ -453,13 +454,11 @@ if uploaded_file is not None:
     PARENT_COL = 'SUM (THEO Khối, KV, ĐVKD, Hội sở, Ban Dự Án QLTS)'
     CHILD_COL = 'Đơn vị thực hiện KPCS trong quý'
 
-    st.markdown("---")
-    st.header("Chọn Loại Báo Cáo Để Tạo")
+    st.markdown("---"); st.header("Chọn Loại Báo Cáo Để Tạo")
     col1, col2, col3 = st.columns(3)
 
     with col1:
         if st.button("🚀 Tạo 7 Báo cáo (Tổng hợp)"):
-            # ... (code xử lý và tải xuống cho 7 báo cáo)
             with st.spinner("⏳ Đang xử lý và tạo 7 báo cáo..."):
                 output_stream = BytesIO()
                 with pd.ExcelWriter(output_stream, engine='xlsxwriter') as writer:
