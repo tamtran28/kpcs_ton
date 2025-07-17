@@ -309,27 +309,44 @@ def create_top_n_table(dataframe, n, group_by_col, dates):
     total_row['Tỷ lệ chưa KP đến cuối Quý'] = (total_row.at['TỔNG CỘNG CỦA NHÓM', 'Tồn cuối quý'] / total_denom) if total_denom != 0 else 0
     return pd.concat([top_n, total_row])
 
+# ✨ HÀM ĐÃ ĐƯỢC CẬP NHẬT ĐỂ SỬA LỖI SẮP XẾP DÒNG TỔNG CỘNG ✨
 def create_hierarchical_table(dataframe, parent_col, child_col, dates):
     cols_order = ['Tên Đơn vị', 'Tồn đầu năm', 'Phát sinh năm', 'Khắc phục năm', 'Tồn đầu quý', 'Phát sinh quý', 'Khắc phục quý', 'Tồn cuối quý', 'Quá hạn khắc phục', 'Trong đó quá hạn trên 1 năm', 'Tỷ lệ chưa KP đến cuối Quý']
-    if dataframe.empty or parent_col not in dataframe.columns or child_col not in dataframe.columns: return pd.DataFrame(columns=cols_order)
+    if dataframe.empty or parent_col not in dataframe.columns or child_col not in dataframe.columns:
+        return pd.DataFrame(columns=cols_order)
+    
     summary_child = calculate_summary_metrics(dataframe, [child_col], **dates)
     parent_mapping = dataframe[[child_col, parent_col]].drop_duplicates()
     summary_with_parent = pd.merge(summary_child.reset_index().rename(columns={'index': child_col}), parent_mapping, on=child_col, how='left')
+    
     final_report_rows = []
-    unique_parents = dataframe[parent_col].dropna().unique()
+    unique_parents = sorted(dataframe[parent_col].dropna().unique()) # Sắp xếp tên đơn vị cha
+    
     for parent_name in unique_parents:
         children_df = summary_with_parent[summary_with_parent[parent_col] == parent_name]
         if children_df.empty: continue
+        
         numeric_cols = children_df.select_dtypes(include=np.number).columns
-        parent_row_sum = children_df[numeric_cols].sum().to_frame().T; parent_row_sum['Tên Đơn vị'] = f"**Cộng {parent_name}**"; final_report_rows.append(parent_row_sum)
-        children_to_append = children_df.rename(columns={child_col: 'Tên Đơn vị'}); children_to_append['Tên Đơn vị'] = "  •  " + children_to_append['Tên Đơn vị'].astype(str); final_report_rows.append(children_to_append)
-    if not final_report_rows: return pd.DataFrame(columns=cols_order)
-    full_report_df = pd.concat(final_report_rows, ignore_index=True)
-    grand_total_row = calculate_summary_metrics(dataframe, [], **dates); grand_total_row['Tên Đơn vị'] = '**TỔNG CỘNG TOÀN BỘ**'
-    full_report_df = pd.concat([full_report_df, grand_total_row], ignore_index=True)
-    return full_report_df.reindex(columns=cols_order)
+        parent_row_sum = children_df[numeric_cols].sum().to_frame().T
+        parent_row_sum['Tên Đơn vị'] = f"**Cộng {parent_name}**"
+        final_report_rows.append(parent_row_sum)
+        
+        children_to_append = children_df.rename(columns={child_col: 'Tên Đơn vị'})
+        children_to_append['Tên Đơn vị'] = "  •  " + children_to_append['Tên Đơn vị'].astype(str)
+        final_report_rows.append(children_to_append)
 
-# ✨ HÀM CHO BÁO CÁO 8 (HỘI SỞ - DẠNG PHẲNG) - ĐÃ SỬA LỖI ✨
+    if not final_report_rows: return pd.DataFrame(columns=cols_order)
+    
+    # Sắp xếp lại toàn bộ bảng dựa trên tên đã định dạng
+    full_report_df = pd.concat(final_report_rows, ignore_index=True)
+    
+    # Thêm dòng tổng cộng vào cuối cùng sau khi đã sắp xếp
+    grand_total_row = calculate_summary_metrics(dataframe, [], **dates)
+    grand_total_row['Tên Đơn vị'] = '**TỔNG CỘNG TOÀN BỘ**'
+    full_report_df = pd.concat([full_report_df, grand_total_row], ignore_index=True)
+    
+    return full_report_df.reindex(columns=cols_order).fillna(0)
+
 def create_report_8_flat_overdue(dataframe, parent_col, dates):
     q_end = dates['quarter_end_date']
     df_outstanding = dataframe[(dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] <= q_end) & ((dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'].isnull()) | (dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] > q_end))].copy()
@@ -343,25 +360,18 @@ def create_report_8_flat_overdue(dataframe, parent_col, dates):
     df_overdue['Số ngày quá hạn'] = (q_end - df_overdue['Thời hạn hoàn thành (mm/dd/yyyy)']).dt.days
     bins = [-np.inf, 90, 180, 270, 365, np.inf]; labels = ['Dưới 3 tháng', 'Từ 3-6 tháng', 'Từ 6-9 tháng', 'Từ 9-12 tháng', 'Trên 1 năm']
     df_overdue['Nhóm quá hạn'] = pd.cut(df_overdue['Số ngày quá hạn'], bins=bins, labels=labels, right=False)
-    
     overdue_breakdown = pd.crosstab(df_overdue[parent_col], df_overdue['Nhóm quá hạn']).reset_index()
     ton_cuoi_quy = calculate_summary_metrics(dataframe, [parent_col], **dates)[['Tồn cuối quý']].reset_index().rename(columns={'index': parent_col})
-    
-    # Sửa lỗi InvalidIndexError bằng pd.merge()
     final_df = pd.merge(ton_cuoi_quy, overdue_breakdown, on=parent_col, how='left').fillna(0)
-    
     final_df['Quá hạn khắc phục'] = final_df[labels].sum(axis=1)
     final_cols_order = [parent_col, 'Tồn cuối quý', 'Quá hạn khắc phục'] + labels
     final_df = final_df.reindex(columns=final_cols_order, fill_value=0)
     numeric_cols = final_df.columns.drop(parent_col)
     final_df[numeric_cols] = final_df[numeric_cols].astype(int)
-    
     total_row = pd.DataFrame(final_df[numeric_cols].sum()).T; total_row[parent_col] = 'TỔNG CỘNG'
     final_df = pd.concat([final_df, total_row])
-    
     return final_df.rename(columns={parent_col: 'Tên Đơn vị'})
 
-# ✨ HÀM MỚI CHO BÁO CÁO 9 (ĐVKD & AMC - DẠNG PHÂN CẤP) ✨
 def create_report_9_hierarchical_overdue(dataframe, parent_col, child_col, dates):
     q_end = dates['quarter_end_date']
     df_outstanding = dataframe[(dataframe['Ngày, tháng, năm ban hành (mm/dd/yyyy)'] <= q_end) & ((dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'].isnull()) | (dataframe['NGÀY HOÀN TẤT KPCS (mm/dd/yyyy)'] > q_end))].copy()
@@ -381,19 +391,19 @@ def create_report_9_hierarchical_overdue(dataframe, parent_col, child_col, dates
     parent_mapping = dataframe[[child_col, parent_col]].drop_duplicates()
     summary_child_with_parent = pd.merge(summary_child, parent_mapping, on=child_col, how='left')
     final_report_rows = []
-    unique_parents = dataframe[parent_col].dropna().unique()
+    unique_parents = sorted(dataframe[parent_col].dropna().unique()) # Sắp xếp tên đơn vị cha
     for parent_name in unique_parents:
         children_df = summary_child_with_parent[summary_child_with_parent[parent_col] == parent_name]
         if children_df.empty: continue
         numeric_cols = children_df.select_dtypes(include=np.number).columns
-        parent_row_sum = children_df[numeric_cols].sum().to_frame().T; parent_row_sum['Tên Đơn vị'] = f"**Cộng {parent_name}**"; parent_row_sum['Cấp'] = 1; final_report_rows.append(parent_row_sum)
-        children_to_append = children_df.rename(columns={child_col: 'Tên Đơn vị'}); children_to_append['Tên Đơn vị'] = "  • " + children_to_append['Tên Đơn vị']; children_to_append['Cấp'] = 2; final_report_rows.append(children_to_append)
+        parent_row_sum = children_df[numeric_cols].sum().to_frame().T; parent_row_sum['Tên Đơn vị'] = f"**Cộng {parent_name}**"
+        final_report_rows.append(parent_row_sum)
+        children_to_append = children_df.rename(columns={child_col: 'Tên Đơn vị'}); children_to_append['Tên Đơn vị'] = "  • " + children_to_append['Tên Đơn vị'];
+        final_report_rows.append(children_to_append)
     if not final_report_rows: return pd.DataFrame()
     final_df = pd.concat(final_report_rows, ignore_index=True).fillna(0)
-    parent_rows = final_df[final_df['Cấp'] == 1]
-    grand_total_row = pd.DataFrame(parent_rows.select_dtypes(include=np.number).sum()).T; grand_total_row['Tên Đơn vị'] = '**TỔNG CỘNG TOÀN BỘ**'; grand_total_row['Cấp'] = 0
+    grand_total_row = pd.DataFrame(final_df.select_dtypes(include=np.number).sum()).T; grand_total_row['Tên Đơn vị'] = '**TỔNG CỘNG TOÀN BỘ**'
     final_df = pd.concat([final_df, grand_total_row])
-    final_df = final_df.sort_values(by=['Tên Đơn vị'], key=lambda x: x.str.replace('*', '').str.replace('•', '').str.strip()).reset_index(drop=True)
     final_df['Quá hạn khắc phục'] = final_df[[col for col in labels if col in final_df.columns]].sum(axis=1)
     final_cols_order = ['Tên Đơn vị', 'Tồn cuối quý', 'Quá hạn khắc phục'] + labels
     final_df = final_df.reindex(columns=final_cols_order, fill_value=0)
