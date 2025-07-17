@@ -309,7 +309,6 @@ def create_top_n_table(dataframe, n, group_by_col, dates):
     total_row['Tỷ lệ chưa KP đến cuối Quý'] = (total_row.at['TỔNG CỘNG CỦA NHÓM', 'Tồn cuối quý'] / total_denom) if total_denom != 0 else 0
     return pd.concat([top_n, total_row])
 
-# ✨ HÀM PHÂN CẤP CHÍNH (Báo cáo 4 & 7) - Đã sửa lỗi sắp xếp
 def create_hierarchical_table(dataframe, parent_col, child_col, dates):
     cols_order = ['Tên Đơn vị', 'Tồn đầu năm', 'Phát sinh năm', 'Khắc phục năm', 'Tồn đầu quý', 'Phát sinh quý', 'Khắc phục quý', 'Tồn cuối quý', 'Quá hạn khắc phục', 'Trong đó quá hạn trên 1 năm', 'Tỷ lệ chưa KP đến cuối Quý']
     if dataframe.empty or parent_col not in dataframe.columns or child_col not in dataframe.columns:
@@ -326,12 +325,8 @@ def create_hierarchical_table(dataframe, parent_col, child_col, dates):
         children_df = summary_with_parent[summary_with_parent[parent_col] == parent_name]
         if children_df.empty: continue
         numeric_cols = children_df.select_dtypes(include=np.number).columns
-        parent_row_sum = children_df[numeric_cols].sum().to_frame().T
-        parent_row_sum['Tên Đơn vị'] = f"**Cộng {parent_name}**"
-        final_report_rows.append(parent_row_sum)
-        children_to_append = children_df.rename(columns={child_col: 'Tên Đơn vị'})
-        children_to_append['Tên Đơn vị'] = "  •  " + children_to_append['Tên Đơn vị'].astype(str)
-        final_report_rows.append(children_to_append)
+        parent_row_sum = children_df[numeric_cols].sum().to_frame().T; parent_row_sum['Tên Đơn vị'] = f"**Cộng {parent_name}**"; final_report_rows.append(parent_row_sum)
+        children_to_append = children_df.rename(columns={child_col: 'Tên Đơn vị'}); children_to_append['Tên Đơn vị'] = "  •  " + children_to_append['Tên Đơn vị'].astype(str); final_report_rows.append(children_to_append)
 
     if not final_report_rows: return pd.DataFrame(columns=cols_order)
     
@@ -354,8 +349,7 @@ def create_overdue_hierarchical_report(dataframe, parent_col, child_col, dates):
         
     df_overdue = df_outstanding[df_outstanding['Thời hạn hoàn thành (mm/dd/yyyy)'] < q_end].copy()
     
-    # Tính toán các chỉ số cần thiết cho cấp CON
-    ton_cuoi_quy_child = calculate_summary_metrics(dataframe, [child_col], **dates)[['Tồn cuối quý']].reset_index().rename(columns={'index': child_col})
+    summary_child = calculate_summary_metrics(dataframe, [child_col], **dates)
     
     overdue_breakdown_child = pd.DataFrame()
     labels = ['Dưới 3 tháng', 'Từ 3-6 tháng', 'Từ 6-9 tháng', 'Từ 9-12 tháng', 'Trên 1 năm']
@@ -363,14 +357,13 @@ def create_overdue_hierarchical_report(dataframe, parent_col, child_col, dates):
         df_overdue['Số ngày quá hạn'] = (q_end - df_overdue['Thời hạn hoàn thành (mm/dd/yyyy)']).dt.days
         bins = [-np.inf, 90, 180, 270, 365, np.inf]
         df_overdue['Nhóm quá hạn'] = pd.cut(df_overdue['Số ngày quá hạn'], bins=bins, labels=labels, right=False)
-        overdue_breakdown_child = pd.crosstab(df_overdue[child_col], df_overdue['Nhóm quá hạn']).reset_index()
+        overdue_breakdown_child = pd.crosstab(df_overdue[child_col], df_overdue['Nhóm quá hạn'])
 
-    # Kết hợp dữ liệu cấp CON một cách an toàn
-    summary_child = pd.merge(ton_cuoi_quy_child, overdue_breakdown_child, on=child_col, how='left')
-    parent_mapping = dataframe[[child_col, parent_col]].drop_duplicates()
-    summary_child_with_parent = pd.merge(summary_child, parent_mapping, on=child_col, how='left')
+    summary_child_full = summary_child.join(overdue_breakdown_child, how='left')
     
-    # Xây dựng báo cáo phân cấp
+    parent_mapping = dataframe[[child_col, parent_col]].drop_duplicates()
+    summary_child_with_parent = pd.merge(summary_child_full.reset_index().rename(columns={'index': child_col}), parent_mapping, on=child_col, how='left')
+    
     final_report_rows = []
     unique_parents = sorted(dataframe[parent_col].dropna().unique())
     for parent_name in unique_parents:
@@ -379,24 +372,25 @@ def create_overdue_hierarchical_report(dataframe, parent_col, child_col, dates):
         
         numeric_cols = children_df.select_dtypes(include=np.number).columns
         parent_row_sum = children_df[numeric_cols].sum().to_frame().T
-        parent_row_sum['Tên Đơn vị'] = f"**{parent_name}**" # Định dạng tên cha (in đậm)
+        parent_row_sum['Tên Đơn vị'] = f"**{parent_name}**"
         final_report_rows.append(parent_row_sum)
         
         children_to_append = children_df.rename(columns={child_col: 'Tên Đơn vị'})
-        children_to_append['Tên Đơn vị'] = "  • " + children_to_append['Tên Đơn vị'] # Định dạng tên con (thụt lề)
+        children_to_append['Tên Đơn vị'] = "  • " + children_to_append['Tên Đơn vị']
         final_report_rows.append(children_to_append)
         
     if not final_report_rows: return pd.DataFrame()
 
     final_df = pd.concat(final_report_rows, ignore_index=True).fillna(0)
     
-    # Thêm dòng tổng cộng
-    grand_total_row = pd.DataFrame(final_df.select_dtypes(include=np.number).sum()).T
+    # TÍNH DÒNG TỔNG CỘNG DỰA TRÊN TOÀN BỘ DỮ LIỆU CỦA NHÓM
+    grand_total_metrics = calculate_summary_metrics(dataframe, [], **dates)
+    grand_total_overdue = df_overdue['Nhóm quá hạn'].value_counts().to_frame().T
+    grand_total_row = pd.concat([grand_total_metrics, grand_total_overdue], axis=1)
     grand_total_row['Tên Đơn vị'] = '**TỔNG CỘNG TOÀN BỘ**'
+    
     final_df = pd.concat([final_df, grand_total_row])
     
-    # Hoàn thiện các cột cuối cùng
-    final_df['Quá hạn khắc phục'] = final_df[[col for col in labels if col in final_df.columns]].sum(axis=1)
     final_cols_order = ['Tên Đơn vị', 'Tồn cuối quý', 'Quá hạn khắc phục'] + labels
     final_df = final_df.reindex(columns=final_cols_order, fill_value=0)
     
@@ -478,7 +472,7 @@ if uploaded_file is not None:
             st.download_button(label="📥 Tải xuống File Tổng hợp", data=excel_data, file_name=f"Tong_hop_Bao_cao_KPCS_Q{input_quarter}_{input_year}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             
     with col2:
-        if st.button("📊 Tạo BC Quá hạn Chi tiết"):
+        if st.button("📊 Tạo BC Quá hạn Chi tiết (8 & 9)"):
             with st.spinner("⏳ Đang xử lý và tạo Báo cáo quá hạn chi tiết..."):
                 # Gọi hàm dùng chung cho cả hai nhóm
                 df8 = create_overdue_hierarchical_report(df_hoiso, PARENT_COL, CHILD_COL, dates)
