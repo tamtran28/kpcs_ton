@@ -253,6 +253,7 @@
 
 #17
 import streamlit as st
+import streamlit as st
 import pandas as pd
 import numpy as np
 from io import BytesIO
@@ -296,8 +297,7 @@ def calculate_summary_metrics(dataframe, groupby_cols, year_start_date, quarter_
     denominator = summary['Phát sinh năm'] + summary['Tồn đầu năm']
     summary['Tỷ lệ chưa KP đến cuối Quý'] = (summary['Tồn cuối quý'] / denominator).replace([np.inf, -np.inf], 0).fillna(0)
     final_cols_order = ['Tồn đầu năm', 'Phát sinh năm', 'Khắc phục năm', 'Tồn đầu quý', 'Phát sinh quý', 'Khắc phục quý', 'Tồn cuối quý', 'Quá hạn khắc phục', 'Trong đó quá hạn trên 1 năm', 'Tỷ lệ chưa KP đến cuối Quý']
-    summary = summary.reindex(columns=final_cols_order, fill_value=0)
-    return summary
+    return summary.reindex(columns=final_cols_order, fill_value=0)
 
 def create_summary_table(dataframe, groupby_col, dates):
     summary = calculate_summary_metrics(dataframe, [groupby_col], **dates)
@@ -355,11 +355,11 @@ def create_hierarchical_table(dataframe, parent_col, child_col, dates):
     
     return full_report_df.reindex(columns=cols_order)
 
-# ✨ HÀM MỚI CHO BÁO CÁO 8 - ĐÃ CHUYỂN SANG DẠNG PHÂN CẤP ✨
+# ✨ HÀM BÁO CÁO 8 ĐÃ VIẾT LẠI HOÀN TOÀN ĐỂ SỬA LỖI TRIỆT ĐỂ ✨
 def create_report_8_hierarchical_overdue(dataframe, parent_col, child_col, dates):
     """
-    Tạo báo cáo chi tiết quá hạn dạng phân cấp (Cha-Con) cho Hội sở.
-    Dòng cha được tính bằng cách cộng dồn các dòng con.
+    Tạo báo cáo chi tiết quá hạn dạng phân cấp (Cha-Con).
+    Sử dụng pd.merge() để tránh lỗi InvalidIndexError.
     """
     q_end = dates['quarter_end_date']
     
@@ -374,20 +374,23 @@ def create_report_8_hierarchical_overdue(dataframe, parent_col, child_col, dates
     # 2. Tính 'Tồn cuối quý' và chi tiết quá hạn cho cấp CON
     ton_cuoi_quy_child = calculate_summary_metrics(dataframe, [child_col], **dates)[['Tồn cuối quý']]
     
-    if df_overdue.empty:
-        st.warning("Không có kiến nghị quá hạn trong kỳ để tạo báo cáo 8.")
-        overdue_breakdown_child = pd.DataFrame()
-    else:
+    # Chuyển index thành cột để chuẩn bị merge
+    ton_cuoi_quy_child = ton_cuoi_quy_child.reset_index().rename(columns={'index': child_col})
+    
+    overdue_breakdown_child = pd.DataFrame(columns=[child_col])
+    if not df_overdue.empty:
         df_overdue['Số ngày quá hạn'] = (q_end - df_overdue['Thời hạn hoàn thành (mm/dd/yyyy)']).dt.days
         bins = [-np.inf, 90, 180, 270, 365, np.inf]
         labels = ['Dưới 3 tháng', 'Từ 3-6 tháng', 'Từ 6-9 tháng', 'Từ 9-12 tháng', 'Trên 1 năm']
         df_overdue['Nhóm quá hạn'] = pd.cut(df_overdue['Số ngày quá hạn'], bins=bins, labels=labels, right=False)
-        overdue_breakdown_child = pd.crosstab(df_overdue[child_col], df_overdue['Nhóm quá hạn'])
+        overdue_breakdown_child = pd.crosstab(df_overdue[child_col], df_overdue['Nhóm quá hạn']).reset_index()
+
+    # 3. Dùng pd.merge() để kết hợp dữ liệu cấp CON một cách an toàn
+    summary_child = pd.merge(ton_cuoi_quy_child, overdue_breakdown_child, on=child_col, how='left').fillna(0)
     
-    # 3. Kết hợp và chuẩn bị dữ liệu cấp CON
-    summary_child = ton_cuoi_quy_child.join(overdue_breakdown_child, how='left').fillna(0)
-    parent_mapping = dataframe[[child_col, parent_col]].drop_duplicates().set_index(child_col)
-    summary_child_with_parent = summary_child.join(parent_mapping)
+    # Gắn thông tin cấp CHA vào bảng của cấp CON
+    parent_mapping = dataframe[[child_col, parent_col]].drop_duplicates()
+    summary_child_with_parent = pd.merge(summary_child, parent_mapping, on=child_col, how='left')
 
     # 4. Xây dựng báo cáo phân cấp
     final_report_rows = []
@@ -397,16 +400,14 @@ def create_report_8_hierarchical_overdue(dataframe, parent_col, child_col, dates
         children_df = summary_child_with_parent[summary_child_with_parent[parent_col] == parent_name]
         if children_df.empty: continue
 
-        # Tạo dòng cha bằng cách sum các dòng con
         numeric_cols = children_df.select_dtypes(include=np.number).columns
         parent_row_sum = children_df[numeric_cols].sum().to_frame().T
-        parent_row_sum['Tên Đơn vị'] = f"**{parent_name}**" # In đậm tên cha
+        parent_row_sum['Tên Đơn vị'] = f"**{parent_name}**"
         parent_row_sum['Cấp'] = 1
         final_report_rows.append(parent_row_sum)
         
-        # Thêm các dòng con
-        children_to_append = children_df.reset_index().rename(columns={'index': 'Tên Đơn vị'})
-        children_to_append['Tên Đơn vị'] = "  • " + children_to_append['Tên Đơn vị'] # Thụt lề tên con
+        children_to_append = children_df.rename(columns={child_col: 'Tên Đơn vị'})
+        children_to_append['Tên Đơn vị'] = "  • " + children_to_append['Tên Đơn vị']
         children_to_append['Cấp'] = 2
         final_report_rows.append(children_to_append)
         
@@ -414,21 +415,18 @@ def create_report_8_hierarchical_overdue(dataframe, parent_col, child_col, dates
         st.info("Không có dữ liệu đơn vị hợp lệ để tạo báo cáo 8.")
         return pd.DataFrame()
         
-    # 5. Hoàn thiện báo cáo
     final_df = pd.concat(final_report_rows, ignore_index=True).fillna(0)
     
-    # Tạo dòng tổng cộng cuối cùng
     parent_rows = final_df[final_df['Cấp'] == 1]
     grand_total_row = pd.DataFrame(parent_rows.select_dtypes(include=np.number).sum()).T
     grand_total_row['Tên Đơn vị'] = '**TỔNG CỘNG HỘI SỞ**'
     grand_total_row['Cấp'] = 0
     final_df = pd.concat([final_df, grand_total_row])
 
-    # Sắp xếp và định dạng
     final_df = final_df.sort_values(by=['Tên Đơn vị'], key=lambda x: x.str.replace('*', '').str.replace('•', '').str.strip()).reset_index(drop=True)
     
     overdue_labels = ['Dưới 3 tháng', 'Từ 3-6 tháng', 'Từ 6-9 tháng', 'Từ 9-12 tháng', 'Trên 1 năm']
-    final_df['Quá hạn khắc phục'] = final_df[overdue_labels].sum(axis=1)
+    final_df['Quá hạn khắc phục'] = final_df[[col for col in overdue_labels if col in final_df.columns]].sum(axis=1)
     
     final_cols_order = ['Tên Đơn vị', 'Tồn cuối quý', 'Quá hạn khắc phục'] + overdue_labels
     final_df = final_df.reindex(columns=final_cols_order, fill_value=0)
