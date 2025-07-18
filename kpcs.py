@@ -59,11 +59,9 @@ def create_hierarchical_table(dataframe, parent_col, child_col, dates):
     cols_order = ['Tên Đơn vị', 'Tồn đầu năm', 'Phát sinh năm', 'Khắc phục năm', 'Tồn đầu quý', 'Phát sinh quý', 'Khắc phục quý', 'Tồn cuối quý', 'Quá hạn khắc phục', 'Trong đó quá hạn trên 1 năm', 'Tỷ lệ chưa KP đến cuối Quý']
     if dataframe.empty or parent_col not in dataframe.columns or child_col not in dataframe.columns:
         return pd.DataFrame(columns=cols_order)
-    
     summary_child = calculate_summary_metrics(dataframe, [child_col], **dates)
     parent_mapping = dataframe[[child_col, parent_col]].drop_duplicates()
     summary_with_parent = pd.merge(summary_child.reset_index().rename(columns={'index': child_col}), parent_mapping, on=child_col, how='left')
-    
     final_report_rows = []
     unique_parents = sorted(dataframe[parent_col].dropna().unique())
     for parent_name in unique_parents:
@@ -78,7 +76,6 @@ def create_hierarchical_table(dataframe, parent_col, child_col, dates):
     full_report_df = pd.concat([full_report_df, grand_total_row], ignore_index=True)
     return full_report_df.reindex(columns=cols_order).fillna(0)
 
-# ✨ HÀM PHÂN CẤP QUÁ HẠN ĐÃ ĐƯỢC VIẾT LẠI HOÀN CHỈNH ✨
 def create_overdue_hierarchical_report(dataframe, parent_col, child_col, dates):
     q_end = dates['quarter_end_date']
     if dataframe.empty or parent_col not in dataframe.columns or child_col not in dataframe.columns:
@@ -90,9 +87,7 @@ def create_overdue_hierarchical_report(dataframe, parent_col, child_col, dates):
         return pd.DataFrame()
         
     df_overdue = df_outstanding[df_outstanding['Thời hạn hoàn thành (mm/dd/yyyy)'] < q_end].copy()
-    
     summary_child = calculate_summary_metrics(dataframe, [child_col], **dates)
-    
     overdue_breakdown_child = pd.DataFrame()
     labels = ['Dưới 3 tháng', 'Từ 3-6 tháng', 'Từ 6-9 tháng', 'Từ 9-12 tháng', 'Trên 1 năm']
     if not df_overdue.empty:
@@ -100,14 +95,10 @@ def create_overdue_hierarchical_report(dataframe, parent_col, child_col, dates):
         bins = [-np.inf, 90, 180, 270, 365, np.inf]
         df_overdue['Nhóm quá hạn'] = pd.cut(df_overdue['Số ngày quá hạn'], bins=bins, labels=labels, right=False)
         overdue_breakdown_child = pd.crosstab(df_overdue[child_col], df_overdue['Nhóm quá hạn'])
-
-    # Sửa lỗi InvalidIndexError bằng cách chuyển sang dùng pd.merge()
-    summary_child_reset = summary_child.reset_index().rename(columns={'index': child_col})
-    overdue_breakdown_reset = overdue_breakdown_child.reset_index()
-    summary_child_full = pd.merge(summary_child_reset, overdue_breakdown_reset, on=child_col, how='left')
-    
+        
+    summary_child_full = summary_child.join(overdue_breakdown_child, how='left')
     parent_mapping = dataframe[[child_col, parent_col]].drop_duplicates()
-    summary_child_with_parent = pd.merge(summary_child_full, parent_mapping, on=child_col, how='left')
+    summary_child_with_parent = pd.merge(summary_child_full.reset_index().rename(columns={'index': child_col}), parent_mapping, on=child_col, how='left')
 
     final_report_rows = []
     unique_parents = sorted(dataframe[parent_col].dropna().unique())
@@ -129,7 +120,9 @@ def create_overdue_hierarchical_report(dataframe, parent_col, child_col, dates):
     final_df = pd.concat(final_report_rows, ignore_index=True)
     
     grand_total_metrics = calculate_summary_metrics(dataframe, [], **dates)
-    grand_total_overdue = df_overdue['Nhóm quá hạn'].value_counts().to_frame().T
+    grand_total_overdue = pd.DataFrame()
+    if not df_overdue.empty:
+        grand_total_overdue = df_overdue['Nhóm quá hạn'].value_counts().to_frame().T
     grand_total_row = pd.concat([grand_total_metrics, grand_total_overdue], axis=1)
     grand_total_row['Tên Đơn vị'] = '**TỔNG CỘNG TOÀN BỘ**'
     
@@ -137,7 +130,12 @@ def create_overdue_hierarchical_report(dataframe, parent_col, child_col, dates):
     
     final_cols_order = ['Tên Đơn vị', 'Tồn đầu năm', 'Phát sinh năm', 'Khắc phục năm', 'Tồn đầu quý', 'Phát sinh quý', 'Khắc phục quý', 'Tồn cuối quý', 'Quá hạn khắc phục', 'Trong đó quá hạn trên 1 năm', 'Tỷ lệ chưa KP đến cuối Quý'] + labels
     final_df = final_df.reindex(columns=final_cols_order, fill_value=0)
+    
+    # ✨ SỬA LỖI IntCastingNaNError TẠI ĐÂY ✨
     numeric_cols = final_df.columns.drop('Tên Đơn vị')
+    # Bước 1: Luôn fillna(0) trước khi đổi kiểu dữ liệu để loại bỏ NaN
+    final_df[numeric_cols] = final_df[numeric_cols].fillna(0)
+    # Bước 2: Chuyển đổi sang kiểu integer một cách an toàn
     final_df[numeric_cols] = final_df[numeric_cols].astype(int)
     
     return final_df
