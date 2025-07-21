@@ -324,6 +324,7 @@ def create_hierarchical_table(dataframe, parent_col, child_col, dates):
     full_report_df = pd.concat([full_report_df, grand_total_row], ignore_index=True)
     return full_report_df.reindex(columns=cols_order).fillna(0)
 
+# ✨ HÀM PHÂN CẤP QUÁ HẠN ĐÃ ĐƯỢC VIẾT LẠI HOÀN CHỈNH ✨
 def create_overdue_hierarchical_report(dataframe, parent_col, child_col, dates):
     q_end = dates['quarter_end_date']
     if dataframe.empty or parent_col not in dataframe.columns or child_col not in dataframe.columns:
@@ -341,9 +342,11 @@ def create_overdue_hierarchical_report(dataframe, parent_col, child_col, dates):
         bins = [-np.inf, 90, 180, 270, 365, np.inf]
         df_overdue['Nhóm quá hạn'] = pd.cut(df_overdue['Số ngày quá hạn'], bins=bins, labels=labels, right=False)
         overdue_breakdown_child = pd.crosstab(df_overdue[child_col], df_overdue['Nhóm quá hạn'])
-    summary_child_full = summary_child.join(overdue_breakdown_child, how='left')
+    summary_child_reset = summary_child.reset_index().rename(columns={'index': child_col})
+    overdue_breakdown_reset = overdue_breakdown_child.reset_index()
+    summary_child_full = pd.merge(summary_child_reset, overdue_breakdown_reset, on=child_col, how='left')
     parent_mapping = dataframe[[child_col, parent_col]].drop_duplicates()
-    summary_child_with_parent = pd.merge(summary_child_full.reset_index().rename(columns={'index': child_col}), parent_mapping, on=child_col, how='left')
+    summary_child_with_parent = pd.merge(summary_child_full, parent_mapping, on=child_col, how='left')
     final_report_rows = []
     unique_parents = sorted(dataframe[parent_col].dropna().unique())
     for parent_name in unique_parents:
@@ -416,9 +419,10 @@ if uploaded_file is not None:
         if col in df.columns: df[col] = df[col].apply(clean_string)
     
     # ✨ SỬA LỖI: Lọc bỏ các dòng tổng cộng có sẵn trong file Excel ✨
-    # Chuyển các cột cần kiểm tra về chữ thường để lọc không phân biệt hoa/thường
-    df = df[~df[PARENT_COL].str.lower().str.contains('tổng cộng|tổng', na=False)]
-    df = df[~df[CHILD_COL].str.lower().str.contains('tổng cộng|tổng', na=False)]
+    if PARENT_COL in df.columns:
+        df = df[~df[PARENT_COL].str.lower().str.contains('tổng cộng|tổng', na=False)]
+    if CHILD_COL in df.columns:
+        df = df[~df[CHILD_COL].str.lower().str.contains('tổng cộng|tổng', na=False)]
             
     df['Nhom_Don_Vi'] = np.where(df['ĐVKD, AMC, Hội sở (Nhập ĐVKD hoặc Hội sở hoặc AMC)'] == 'Hội sở', 'Hội sở', 'ĐVKD, AMC')
     df_hoiso = df[df['Nhom_Don_Vi'] == 'Hội sở'].copy()
