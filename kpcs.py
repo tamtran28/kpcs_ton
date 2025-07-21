@@ -324,7 +324,6 @@ def create_hierarchical_table(dataframe, parent_col, child_col, dates):
     full_report_df = pd.concat([full_report_df, grand_total_row], ignore_index=True)
     return full_report_df.reindex(columns=cols_order).fillna(0)
 
-# ✨ HÀM PHÂN CẤP QUÁ HẠN ĐÃ ĐƯỢC VIẾT LẠI HOÀN CHỈNH ✨
 def create_overdue_hierarchical_report(dataframe, parent_col, child_col, dates):
     q_end = dates['quarter_end_date']
     if dataframe.empty or parent_col not in dataframe.columns or child_col not in dataframe.columns:
@@ -342,14 +341,15 @@ def create_overdue_hierarchical_report(dataframe, parent_col, child_col, dates):
         bins = [-np.inf, 90, 180, 270, 365, np.inf]
         df_overdue['Nhóm quá hạn'] = pd.cut(df_overdue['Số ngày quá hạn'], bins=bins, labels=labels, right=False)
         overdue_breakdown_child = pd.crosstab(df_overdue[child_col], df_overdue['Nhóm quá hạn'])
-    summary_child_reset = summary_child.reset_index().rename(columns={'index': child_col})
-    overdue_breakdown_reset = overdue_breakdown_child.reset_index()
-    summary_child_full = pd.merge(summary_child_reset, overdue_breakdown_reset, on=child_col, how='left')
+    summary_child_full = summary_child.join(overdue_breakdown_child, how='left')
     parent_mapping = dataframe[[child_col, parent_col]].drop_duplicates()
-    summary_child_with_parent = pd.merge(summary_child_full, parent_mapping, on=child_col, how='left')
+    summary_child_with_parent = pd.merge(summary_child_full.reset_index().rename(columns={'index': child_col}), parent_mapping, on=child_col, how='left')
     final_report_rows = []
     unique_parents = sorted(dataframe[parent_col].dropna().unique())
     for parent_name in unique_parents:
+        # Lớp bảo vệ thứ 2: Bỏ qua nếu tên đơn vị cha chứa chữ "tổng"
+        if 'tổng' in str(parent_name).lower():
+            continue
         children_df = summary_child_with_parent[summary_child_with_parent[parent_col] == parent_name]
         if children_df.empty: continue
         numeric_cols = children_df.select_dtypes(include=np.number).columns
